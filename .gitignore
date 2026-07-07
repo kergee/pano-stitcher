@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 生成/临时产物
+output/
+out*.log
+*.jpg
+*.jpeg
+*.png
+
+# 测试素材（可由 tools/make_testset.py 重新生成）
+photos_test/
+photos_bench/
+
+# 用户私人照片（请勿入库）
+photos/
+
+# 第三方对比基准二进制（AutoStitch 官方发行版，非本项目源码）
+autostitch64/
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

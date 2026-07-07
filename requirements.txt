@@ -1,0 +1,6 @@
+opencv-python>=4.10
+numpy
+scipy
+fastapi
+uvicorn[standard]
+python-multipart
