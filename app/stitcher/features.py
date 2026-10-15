@@ -1,12 +1,6 @@
-"""特征提取与匹配后端。
-
-两个后端，统一接口（extract → ImageFeats，match → 对应点坐标对）：
-- SiftBackend：经典 SIFT + 比值检验（AutoStitch 同款，作为回退）
-- DeepBackend：DISK 深度特征 + LightGlue 匹配器（kornia 实现），
-  在弱纹理/重复纹理/大视角变化场景下成功率远超 SIFT —— 引擎 2 的核心超越点。
-
-C++ 迁移对照：SIFT → cv::SIFT + cv::BFMatcher；
-深度后端 → 模型导出 ONNX 后用 onnxruntime (iOS/Android/鸿蒙均支持) 推理。
+"""统一特征与带评分匹配接口：SIFT 双向比值互检，DISK/LightGlue 可选后端。
+明确指定 deep 时失败不会回退；auto 回退时结果报告实际后端。
+C++ 对照：cv::SIFT、cv::BFMatcher；移动端深度模型仍需另行导出和验证。
 """
 from __future__ import annotations
 
@@ -24,6 +18,43 @@ class ImageFeats:
     size: tuple[int, int]  # (w, h) 工作分辨率
 
 
+@dataclass
+class Matches:
+    pts_i: np.ndarray
+    pts_j: np.ndarray
+    indices: np.ndarray
+    scores: np.ndarray
+    source: str
+
+    def __iter__(self):  # compatibility with coordinate-pair callers
+        return iter((self.pts_i, self.pts_j))
+
+
+def match_record(fi, fj, indices, scores, source):
+    idx = np.asarray(indices, dtype=np.int32).reshape(-1,2)
+    scores = np.asarray(scores, dtype=np.float32)
+    if scores.shape!=(len(idx),):
+        raise ValueError("匹配评分数量与索引数量不一致")
+    chosen=[]; seen_i=set(); seen_j=set()
+    for k in np.argsort(-scores, kind='stable'):
+        a,b=idx[k]
+        if min(a,b)<0 or a>=len(fi.kps) or b>=len(fj.kps):
+            raise ValueError("匹配特征索引越界")
+        if not np.isfinite(fi.kps[a]).all() or not np.isfinite(fj.kps[b]).all():
+            continue
+        # SIFT orientations can duplicate coordinates despite distinct feature indices.
+        ki=tuple(np.round(fi.kps[a],1)); kj=tuple(np.round(fj.kps[b],1))
+        if ki in seen_i or kj in seen_j or not np.isfinite(scores[k]):
+            continue
+        seen_i.add(ki);seen_j.add(kj);chosen.append(k)
+    idx=idx[chosen]
+    return Matches(fi.kps[idx[:,0]],fj.kps[idx[:,1]],idx,scores[chosen],source)
+
+
+def empty_matches(source):
+    return Matches(np.empty((0,2),np.float32),np.empty((0,2),np.float32),np.empty((0,2),np.int32),np.empty(0,np.float32),source)
+
+
 class SiftBackend:
     name = "sift"
 
@@ -37,17 +68,16 @@ class SiftBackend:
         pts = np.float32([k.pt for k in kps]) if kps else np.zeros((0, 2), np.float32)
         return ImageFeats(pts, desc, (img_bgr.shape[1], img_bgr.shape[0]))
 
-    def match(self, fi: ImageFeats, fj: ImageFeats) -> tuple[np.ndarray, np.ndarray]:
-        empty = (np.zeros((0, 2), np.float32),) * 2
-        if fi.payload is None or fj.payload is None or len(fi.kps) < 4 or len(fj.kps) < 4:
-            return empty
-        knn = self._matcher.knnMatch(fi.payload, fj.payload, k=2)
-        good = [m[0] for m in knn if len(m) == 2 and m[0].distance < 0.8 * m[1].distance]
-        if not good:
-            return empty
-        pts_i = fi.kps[[m.queryIdx for m in good]]
-        pts_j = fj.kps[[m.trainIdx for m in good]]
-        return pts_i, pts_j
+    def match(self, fi: ImageFeats, fj: ImageFeats) -> Matches:
+        if fi.payload is None or fj.payload is None or min(len(fi.kps),len(fj.kps)) < 4:
+            return empty_matches(self.name)
+        def accepted(a,b):
+            return {row[0].queryIdx:(row[0].trainIdx,1-row[0].distance/max(row[1].distance,1e-9))
+                    for row in self._matcher.knnMatch(a,b,k=2)
+                    if len(row)==2 and row[0].distance < 0.8*row[1].distance}
+        forward=accepted(fi.payload,fj.payload);reverse=accepted(fj.payload,fi.payload)
+        good=[(a,b,min(score,reverse[b][1])) for a,(b,score) in forward.items() if b in reverse and reverse[b][0]==a]
+        return match_record(fi,fj,[(a,b) for a,b,_ in good],[score for _,_,score in good],self.name)
 
 
 class DeepBackend:
@@ -85,8 +115,8 @@ class DeepBackend:
             "image_size": torch.tensor([list(f.size)], dtype=torch.float32, device=self._device),
         }
 
-    def match(self, fi: ImageFeats, fj: ImageFeats) -> tuple[np.ndarray, np.ndarray]:
-        empty = (np.zeros((0, 2), np.float32),) * 2
+    def match(self, fi: ImageFeats, fj: ImageFeats) -> Matches:
+        empty = empty_matches(self.name)
         if len(fi.kps) < 4 or len(fj.kps) < 4:
             return empty
         torch = self._torch
@@ -100,7 +130,13 @@ class DeepBackend:
             idx = np.stack([valid, m0[valid]], axis=1)
         if len(idx) == 0:
             return empty
-        return fi.kps[idx[:, 0]], fj.kps[idx[:, 1]]
+        if 'scores' in out:
+            scores=out['scores'][0].detach().cpu().numpy()
+        elif 'matching_scores0' in out:
+            scores=out['matching_scores0'][0].detach().cpu().numpy()[idx[:,0]]
+        else:
+            raise RuntimeError('LightGlue 接口未提供匹配置信度，拒绝无评分匹配')
+        return match_record(fi,fj,idx,scores,self.name)
 
 
 _deep_backend = None
@@ -109,6 +145,8 @@ _deep_error: str | None = None
 
 def get_backend(name: str = "auto"):
     """按名称获取后端；auto 优先深度后端，不可用时回退 SIFT。深度后端全局缓存（模型只加载一次）。"""
+    if name not in ("auto","deep","sift"):
+        raise ValueError(f"未知特征后端：{name}")
     global _deep_backend, _deep_error
     if name in ("auto", "deep"):
         if _deep_backend is None and _deep_error is None:

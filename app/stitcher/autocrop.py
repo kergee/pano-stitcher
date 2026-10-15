@@ -12,17 +12,22 @@ import numpy as np
 _MAX_SIDE = 640  # 掩码缩小到此边长再计算
 
 
-def largest_inner_rect(mask: np.ndarray) -> tuple[int, int, int, int]:
+def largest_inner_rect(mask: np.ndarray) -> tuple[int, int, int, int] | None:
     """mask: uint8（>0 为有效像素）。返回 (x, y, w, h)，原分辨率坐标。"""
-    H, W = mask.shape[:2]
-    s = min(1.0, _MAX_SIDE / max(H, W))
-    m = cv2.resize(mask, (max(1, int(W * s)), max(1, int(H * s))),
-                   interpolation=cv2.INTER_NEAREST) if s < 1.0 else mask
-    m = (m > 0).astype(np.int32)
+    if mask.ndim!=2:
+        raise ValueError('裁剪掩码必须为二维')
+    H,W=mask.shape
+    if not H or not W or not np.any(mask>0):
+        return None
+    # Exact conservative block pooling: a single invalid source pixel invalidates its cell.
+    block=max(1,int(np.ceil(max(H,W)/_MAX_SIDE)))
+    mh,mw=(H+block-1)//block,(W+block-1)//block
+    valid=np.pad(mask>0,((0,mh*block-H),(0,mw*block-W)),constant_values=False)
+    m=valid.reshape(mh,block,mw,block).all(axis=(1,3)).astype(np.int32)
     h, w = m.shape
 
     heights = np.zeros(w, np.int32)
-    best = (0, 0, w, h)
+    best = None
     best_area = 0
     for y in range(h):
         heights = (heights + 1) * m[y]
@@ -40,14 +45,14 @@ def largest_inner_rect(mask: np.ndarray) -> tuple[int, int, int, int]:
             if not stack or cur > stack[-1][1]:
                 stack.append((start, cur))
 
-    x0, y0, rw, rh = best
-    # 还原到原分辨率并收缩 1px 防边缘半透明像素
-    inv = 1.0 / s
-    x0 = min(W - 1, int(np.ceil(x0 * inv)) + 1)
-    y0 = min(H - 1, int(np.ceil(y0 * inv)) + 1)
-    x1 = max(x0 + 1, int((best[0] + rw) * inv) - 1)
-    y1 = max(y0 + 1, int((best[1] + rh) * inv) - 1)
-    return (x0, y0, min(x1, W) - x0, min(y1, H) - y0)
+    if best is None:
+        return None
+    x,y,rw,rh=(v*block for v in best)
+    rect=(x,y,min(rw,W-x),min(rh,H-y))
+    if not np.all(mask[y:y+rect[3],x:x+rect[2]]>0):
+        raise ValueError('内部错误：裁剪矩形包含无效像素')
+    return rect
+
 
 
 def valid_mask_from_image(pano: np.ndarray) -> np.ndarray:

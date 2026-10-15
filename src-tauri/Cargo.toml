@@ -1,0 +1,16 @@
+[package]
+name = "pano"
+version = "0.1.0"
+description = "Pano desktop shell"
+authors = ["Pano"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.84"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"

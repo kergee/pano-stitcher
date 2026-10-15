@@ -8,6 +8,8 @@ venv/
 # 生成/临时产物
 output/
 out*.log
+build/
+dist/
 *.jpg
 *.jpeg
 *.png
@@ -27,3 +29,9 @@ autostitch64/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Node/Tauri
+node_modules/
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/gen/

@@ -41,6 +41,10 @@
   .seg button.on { background: var(--accent); color: #fff; }
   select { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
     border-radius: 8px; padding: 7px 10px; font-size: 14px; }
+  input[type=number] { width: 92px; background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 10px; font-size: 14px; }
+  input[type=range] { width: 104px; accent-color: var(--accent); }
+  .qv { min-width: 24px; color: var(--dim); font-size: 13px; }
   #go { margin-left: auto; border: 0; border-radius: 10px; background: var(--accent); color: #fff;
     padding: 11px 30px; font-size: 15px; font-weight: 600; cursor: pointer; }
   #go:disabled { opacity: .45; cursor: not-allowed; }
@@ -119,6 +123,13 @@
         <option value="mercator">墨卡托</option>
       </select>
     </div>
+    <div class="grp"><span class="lbl">最大输出边长</span>
+      <input id="maxOutputSide" type="number" min="0" max="12000" step="256" value="0" title="0 表示不限制">
+    </div>
+    <div class="grp"><span class="lbl">JPEG</span>
+      <input id="jpegQuality" type="range" min="60" max="98" value="92">
+      <span class="qv" id="jpegQualityVal">92</span>
+    </div>
     <button id="go" disabled>开始拼接</button>
   </div>
 
@@ -128,6 +139,8 @@
 
 <script>
 const $ = s => document.querySelector(s);
+const API_BASE = location.protocol === "http:" || location.protocol === "https:" ? "" : "http://127.0.0.1:8000";
+const api = path => API_BASE + path;
 let files = [];
 let engine = "pro";
 
@@ -159,10 +172,19 @@ $("#engineSeg").onclick = e => {
   if (e.target.dataset.v) {
     engine = e.target.dataset.v;
     document.querySelectorAll("#engineSeg button").forEach(b => b.classList.toggle("on", b === e.target));
+    syncControls();
   }
 };
 
 const NAMES = { pro: "超越版", baseline: "基线（AutoStitch 同源）" };
+
+function syncControls() {
+  const baselineOnly = engine === "baseline";
+  $("#backend").disabled = baselineOnly;
+  $("#projection").disabled = baselineOnly;
+}
+$("#jpegQuality").oninput = () => $("#jpegQualityVal").textContent = $("#jpegQuality").value;
+syncControls();
 
 async function stitchOne(eng) {
   const fd = new FormData();
@@ -170,16 +192,52 @@ async function stitchOne(eng) {
   fd.append("engine", eng);
   fd.append("backend", $("#backend").value);
   fd.append("projection", $("#projection").value);
+  fd.append("max_output_side", $("#maxOutputSide").value);
+  fd.append("jpeg_quality", $("#jpegQuality").value);
   const t0 = Date.now();
-  const timer = setInterval(() => {
-    $("#statusText").textContent = `${NAMES[eng]} 拼接中… ${((Date.now() - t0) / 1000).toFixed(0)} 秒`;
-  }, 500);
   try {
-    const r = await fetch("/api/stitch", { method: "POST", body: fd });
-    return await r.json();
+    const start = await fetch(api("/api/stitch/jobs"), { method: "POST", body: fd });
+    const init = await start.json();
+    if (!init.ok) return { ok: false, engine: eng, error: init.error || "任务创建失败" };
+
+    return await new Promise(resolve => {
+      let settled = false;
+      let stage = "排队中";
+      let frac = 0;
+      const show = () => {
+        const seconds = ((Date.now() - t0) / 1000).toFixed(0);
+        const pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
+        $("#statusText").textContent = `${NAMES[eng]} ${stage} · ${pct}% · ${seconds} 秒`;
+      };
+      const timer = setInterval(show, 500);
+      const es = new EventSource(api(`/api/stitch/jobs/${init.job_id}/events`));
+      const finish = res => {
+        if (settled) return;
+        settled = true;
+        clearInterval(timer);
+        es.close();
+        resolve(res);
+      };
+      es.addEventListener("progress", e => {
+        const p = JSON.parse(e.data);
+        stage = p.stage || stage;
+        frac = Number.isFinite(p.frac) ? p.frac : frac;
+        show();
+      });
+      es.addEventListener("done", async () => {
+        try {
+          const r = await fetch(api(`/api/stitch/jobs/${init.job_id}/result`));
+          finish(await r.json());
+        } catch (e) {
+          finish({ ok: false, engine: eng, error: "读取结果失败：" + e });
+        }
+      });
+      es.onerror = () => finish({ ok: false, engine: eng, error: "进度连接中断" });
+      show();
+    });
   } catch (e) {
     return { ok: false, engine: eng, error: "请求失败：" + e };
-  } finally { clearInterval(timer); }
+  }
 }
 
 /* ---- 裁剪编辑器：rect 存自然分辨率坐标，用百分比定位（窗口缩放自适应） ---- */

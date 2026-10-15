@@ -15,6 +15,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from app.stitcher.imageio import write_image, save_manifest
+
 import cv2
 import numpy as np
 
@@ -24,6 +27,8 @@ LAT_RANGE = 0.7
 VIEW_W, VIEW_H, FOCAL = 720, 540, 560.0  # hfov ≈ 65.5°
 
 SCENARIOS = {
+    "mixed": dict(rich=True, yaw_step=18, dark=False),
+    "repeat": dict(rich=True, yaw_step=18, dark=False),
     "normal": dict(rich=True, yaw_step=18, dark=False),
     "lowtex": dict(rich=False, yaw_step=18, dark=False),
     "lowoverlap": dict(rich=True, yaw_step=50, dark=False),
@@ -91,12 +96,22 @@ def generate(scenario: str, out: Path) -> None:
     cfg = SCENARIOS[scenario]
     out.mkdir(parents=True, exist_ok=True)
     env = make_environment(cfg["rich"])
+    if scenario=='repeat':
+        tile=np.random.default_rng(99).integers(0,255,(128,128,3),np.uint8)
+        tile=cv2.GaussianBlur(tile,(0,0),2)
+        env=np.tile(tile,((PANO_H+127)//128,(PANO_W+127)//128,1))[:PANO_H,:PANO_W].copy()
     rng = np.random.default_rng(7)
     yaws = [(k - (N_VIEWS - 1) / 2) * cfg["yaw_step"] for k in range(N_VIEWS)]
     for k, yaw in enumerate(yaws):
         p = out / f"view_{k:02d}.jpg"
-        cv2.imwrite(str(p), render_view(env, yaw, cfg["dark"], rng), [cv2.IMWRITE_JPEG_QUALITY, 95])
+        image=render_view(env,yaw,cfg['dark'],rng)
+        if scenario=='mixed' and k%2==0:
+            crop=20+20*k
+            image=image[crop:-crop,crop:-crop]
+        write_image(p,image,[cv2.IMWRITE_JPEG_QUALITY,95])
         print(f"生成 {p}（yaw={yaw:.0f}°，真实焦距 {FOCAL}px）")
+
+    save_manifest(out, [out / f"view_{k:02d}.jpg" for k in range(N_VIEWS)], scenario=scenario, seeds=[42,7], focal=FOCAL)
 
 
 if __name__ == "__main__":
