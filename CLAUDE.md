@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-全景图像拼接项目：复刻并超越 AutoStitch。Python 原型（未来计划迁移 iOS/鸿蒙/Android，因此**拼接核心 `app/stitcher/` 与 Web 层严格解耦**——核心只依赖 OpenCV/numpy/torch，禁止 import FastAPI；关键步骤注释了对应的 C++ API 名以便日后翻译）。
+全景图像拼接实验项目：参考与借鉴 AutoStitch 相关论文和已有调研。Python 原型（未来计划迁移 iOS/鸿蒙/Android，因此**拼接核心 `app/stitcher/` 与 Web 层严格解耦**——核心只依赖 OpenCV/numpy/torch，禁止 import FastAPI；关键步骤注释了对应的 C++ API 名以便日后翻译）。
 
 - `README.md` — 项目现状、实测数据、**Roadmap**（短期打磨 / 中期移动端迁移 / 长期生成式与 3D）
 - `pano.md` — 拼接技术 20 年演进笔记（中文），本项目的技术路线依据
@@ -26,8 +26,8 @@ python -m uvicorn app.main:app --port 8000        # 网页界面（或 preview_s
 
 两个拼接引擎，统一由 `app/main.py`（FastAPI + `app/static/index.html` 单页）暴露：
 
-- **引擎 1 基线** `app/stitcher/baseline.py`：`cv2.Stitcher`（即 AutoStitch 作者 Brown 的算法），质量基准。
-- **引擎 2 超越版** `app/stitcher/pipeline.py`：自建旋转相机模型流水线——深度特征匹配（`features.py`：DISK+LightGlue via kornia，SIFT 回退）→ MAGSAC 单应性 → 闭式焦距估计 + 最大生成树串接旋转 → scipy 光束法平差 → `cv2.detail` 波形校正/投影（球面/平面/柱面/墨卡托，`projection` 参数）→ 局部网格弹性校正（`localwarp.py`，APAP 思想消视差：匹配点残差的高斯加权位移场 + remap，接缝与合成两阶段共用一场）→ 分块曝光补偿/GraphCut 接缝/多频段融合 → 自动裁剪（`autocrop.py`，最大内接矩形）。注意视差校正用的是 `_Pair.all_i/all_j`（全部匹配点）——MAGSAC 内点只含符合全局单应性的匹配，视差点恰好在内点之外。
+- **引擎 1 基线** `app/stitcher/baseline.py`：`cv2.Stitcher`，OpenCV 经典旋转全景流水线，作为对照基线。
+- **引擎 2 自建流水线** `app/stitcher/pipeline.py`：自建旋转相机模型流水线——深度特征匹配（`features.py`：DISK+LightGlue via kornia，SIFT 回退）→ MAGSAC 单应性 → 闭式焦距估计 + 最大生成树串接旋转 → scipy 光束法平差 → `cv2.detail` 波形校正/投影（球面/平面/柱面/墨卡托，`projection` 参数）→ 局部网格弹性校正（`localwarp.py`，借鉴局部对齐思路：匹配点残差的高斯加权位移场 + remap，接缝与合成两阶段共用一场）→ 分块曝光补偿/GraphCut 接缝/多频段融合 → 自动裁剪（`autocrop.py`，最大内接矩形）。注意视差校正用的是 `_Pair.all_i/all_j`（全部匹配点）——MAGSAC 内点侧重全局单应性；局部场从匹配中进一步筛选邻域一致的可信视差点。
 
 ### 关键约定（易错点）
 

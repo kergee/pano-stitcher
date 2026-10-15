@@ -261,7 +261,7 @@ def stitch_pro(
     pair_mode: str = "all",
     quality: str = "full",
 ) -> StitchResult:
-    """超越版拼接。images 为 BGR 原始分辨率图片列表。
+    """自建旋转相机流水线拼接。images 为 BGR 原始分辨率图片列表。
     projection：spherical（默认）/ cylindrical / mercator / plane（直线不弯，视角大时边缘拉伸）。"""
     progress = progress or _noop
     try:

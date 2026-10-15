@@ -91,7 +91,7 @@
 <body>
 <div class="wrap">
   <h1>全景拼接 <span>Pano</span></h1>
-  <div class="sub">基线 = AutoStitch 同源算法（OpenCV Stitcher）；超越版 = 深度特征匹配 + MAGSAC + 视差校正 + GraphCut 接缝 + 分块曝光补偿</div>
+  <div class="sub">参考与借鉴 AutoStitch 相关论文和调研；OpenCV 基线与自建流水线可对照，支持可选深度匹配、MAGSAC、局部形变、接缝搜索和曝光补偿</div>
 
   <div id="drop">
     <div><b>点击选择</b> 或拖拽多张重叠照片到这里</div>
@@ -103,7 +103,7 @@
   <div class="controls">
     <div class="grp"><span class="lbl">引擎</span>
       <div class="seg" id="engineSeg">
-        <button data-v="pro" class="on">超越版</button>
+        <button data-v="pro" class="on">自建引擎</button>
         <button data-v="baseline">基线</button>
         <button data-v="both">双引擎对比</button>
       </div>
@@ -116,7 +116,7 @@
       </select>
     </div>
     <div class="grp"><span class="lbl">投影</span>
-      <select id="projection" title="仅超越版引擎生效；基线固定球面投影">
+      <select id="projection" title="仅自建引擎引擎生效；基线固定球面投影">
         <option value="spherical">球面（默认）</option>
         <option value="plane">平面（直线不弯）</option>
         <option value="cylindrical">柱面（竖线不弯）</option>
@@ -176,7 +176,7 @@ $("#engineSeg").onclick = e => {
   }
 };
 
-const NAMES = { pro: "超越版", baseline: "基线（AutoStitch 同源）" };
+const NAMES = { pro: "自建引擎", baseline: "OpenCV 基线" };
 
 function syncControls() {
   const baselineOnly = engine === "baseline";
